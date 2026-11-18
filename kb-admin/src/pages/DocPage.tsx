@@ -4,6 +4,7 @@ import {
   Check,
   Clock,
   Eye,
+  EyeOff,
   FileText,
   Folder,
   Pencil,
@@ -13,6 +14,14 @@ import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -125,6 +134,7 @@ export function DocPage({ docId, navigate }: { docId: string; navigate: (r: Rout
   const doc = store.docs.find((d) => d.id === docId)
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
+  const [confirmDel, setConfirmDel] = useState(false)
 
   useEffect(() => {
     if (doc) {
@@ -133,18 +143,52 @@ export function DocPage({ docId, navigate }: { docId: string; navigate: (r: Rout
     }
   }, [doc?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!doc) {
+  const space = doc ? store.spaces.find((s) => s.id === doc.spaceId) : undefined
+  const notFound = !doc
+  const noAccess = !!doc && !!space && !store.canView(space)
+  const canEdit = !!doc && !!space && store.canEdit(space)
+
+  // 文档不存在或无权查看时，稍后自动返回
+  useEffect(() => {
+    if (notFound || noAccess) {
+      const t = window.setTimeout(() => navigate({ name: 'spaces' }), 1500)
+      return () => window.clearTimeout(t)
+    }
+  }, [notFound, noAccess, navigate])
+
+  if (!doc || !space) {
     return (
       <div className="p-6">
         <div className="text-sm text-muted-foreground">文档不存在或已被删除。</div>
-        <Button variant="outline" className="mt-4 cursor-pointer" onClick={() => navigate({ name: 'spaces' })}>
+        <Button
+          variant="outline"
+          className="mt-4 cursor-pointer"
+          onClick={() => navigate({ name: 'spaces' })}
+        >
           返回知识库
         </Button>
       </div>
     )
   }
 
-  const space = store.spaces.find((s) => s.id === doc.spaceId)
+  if (noAccess) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 p-6 py-24 text-center">
+        <EyeOff className="h-10 w-10 text-muted-foreground/50" />
+        <div className="text-sm text-muted-foreground">
+          您没有权限查看该文档所属的知识库。
+        </div>
+        <Button
+          variant="outline"
+          className="cursor-pointer"
+          onClick={() => navigate({ name: 'spaces' })}
+        >
+          返回知识库
+        </Button>
+      </div>
+    )
+  }
+
   const folder = doc.nodeId !== 'root' ? store.nodes.find((n) => n.id === doc.nodeId) : null
 
   const save = () => {
@@ -188,21 +232,26 @@ export function DocPage({ docId, navigate }: { docId: string; navigate: (r: Rout
             <Clock className="h-3.5 w-3.5" />
             更新于 {new Date(doc.updatedAt).toLocaleString('zh-CN')}
           </span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="cursor-pointer text-destructive hover:text-destructive"
-            onClick={() => {
-              store.deleteDoc(doc.id)
-              toast.success('文档已删除')
-              navigate({ name: 'space', id: doc.spaceId })
-            }}
-          >
-            <Trash2 className="mr-1 h-4 w-4" />
-            删除
-          </Button>
+          {canEdit && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="cursor-pointer text-destructive hover:text-destructive"
+              onClick={() => setConfirmDel(true)}
+            >
+              <Trash2 className="mr-1 h-4 w-4" />
+              删除
+            </Button>
+          )}
         </div>
       </div>
+
+      {!canEdit && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <Eye className="h-3.5 w-3.5" />
+          您在「{space.name}」中仅有查看权限，无法编辑此文档。
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-6">
@@ -211,6 +260,7 @@ export function DocPage({ docId, navigate }: { docId: string; navigate: (r: Rout
               <Input
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
+                disabled={!canEdit}
                 className="border-transparent bg-transparent px-0 text-2xl font-bold shadow-none focus-visible:border-slate-200 focus-visible:shadow-sm"
                 placeholder="输入文档标题"
               />
@@ -218,9 +268,11 @@ export function DocPage({ docId, navigate }: { docId: string; navigate: (r: Rout
                 <TabsTrigger value="view" className="cursor-pointer gap-1">
                   <Eye className="h-3.5 w-3.5" /> 预览
                 </TabsTrigger>
-                <TabsTrigger value="edit" className="cursor-pointer gap-1">
-                  <Pencil className="h-3.5 w-3.5" /> 编辑
-                </TabsTrigger>
+                {canEdit && (
+                  <TabsTrigger value="edit" className="cursor-pointer gap-1">
+                    <Pencil className="h-3.5 w-3.5" /> 编辑
+                  </TabsTrigger>
+                )}
               </TabsList>
             </div>
 
@@ -231,33 +283,65 @@ export function DocPage({ docId, navigate }: { docId: string; navigate: (r: Rout
                 ) : (
                   <div className="flex min-h-96 flex-col items-center justify-center gap-2 text-muted-foreground">
                     <FileText className="h-10 w-10 opacity-30" />
-                    <span className="text-sm">暂无内容，切换到「编辑」开始撰写</span>
+                    <span className="text-sm">
+                      {canEdit ? '暂无内容，切换到「编辑」开始撰写' : '暂无内容'}
+                    </span>
                   </div>
                 )}
               </div>
             </TabsContent>
 
-            <TabsContent value="edit">
-              <Textarea
-                value={content}
-                onChange={(e) => setContent(e.target.value)}
-                rows={20}
-                className="min-h-96 font-mono text-sm leading-6"
-                placeholder={'支持 Markdown 语法：\n# 一级标题\n## 二级标题\n- 列表项\n**加粗文本**'}
-              />
-              <div className="mt-3 flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">
-                  支持 Markdown：标题、列表、代码块、加粗
-                </span>
-                <Button className="cursor-pointer" onClick={save}>
-                  <Check className="mr-2 h-4 w-4" />
-                  保存文档
-                </Button>
-              </div>
-            </TabsContent>
+            {canEdit && (
+              <TabsContent value="edit">
+                <Textarea
+                  value={content}
+                  onChange={(e) => setContent(e.target.value)}
+                  rows={20}
+                  className="min-h-96 font-mono text-sm leading-6"
+                  placeholder={'支持 Markdown 语法：\n# 一级标题\n## 二级标题\n- 列表项\n**加粗文本**'}
+                />
+                <div className="mt-3 flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">
+                    支持 Markdown：标题、列表、代码块、加粗
+                  </span>
+                  <Button className="cursor-pointer" onClick={save}>
+                    <Check className="mr-2 h-4 w-4" />
+                    保存文档
+                  </Button>
+                </div>
+              </TabsContent>
+            )}
           </Tabs>
         </CardContent>
       </Card>
+
+      {/* 删除文档确认 */}
+      <Dialog open={confirmDel} onOpenChange={setConfirmDel}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认删除文档？</DialogTitle>
+            <DialogDescription>
+              将永久删除「{title || doc.title}」，该操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setConfirmDel(false)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              className="cursor-pointer"
+              onClick={() => {
+                store.deleteDoc(doc.id)
+                toast.success('文档已删除')
+                navigate({ name: 'space', id: doc.spaceId })
+              }}
+            >
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

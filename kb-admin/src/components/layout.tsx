@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BookOpen,
   ChevronsRight,
@@ -6,9 +6,21 @@ import {
   LayoutDashboard,
   LibraryBig,
   LogOut,
+  RotateCcw,
   Search,
   ShieldCheck,
 } from 'lucide-react'
+import { toast } from 'sonner'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import {
   DropdownMenu,
@@ -20,7 +32,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { useStore } from '@/lib/store'
-import type { Route } from '@/types'
+import { ROLE_LABEL, type Route } from '@/types'
 import { cn } from '@/lib/utils'
 
 interface LayoutProps {
@@ -32,16 +44,41 @@ interface LayoutProps {
 const NAV_ITEMS = [
   { key: 'dashboard', label: '仪表盘', icon: LayoutDashboard, route: { name: 'dashboard' } as Route },
   { key: 'spaces', label: '知识库', icon: LibraryBig, route: { name: 'spaces' } as Route },
-  { key: 'members', label: '成员与权限', icon: ShieldCheck, route: { name: 'members' } as Route },
+  { key: 'members', label: '成员与权限', icon: ShieldCheck, route: { name: 'members' } as Route, adminOnly: true },
 ]
 
 export function AppLayout({ route, navigate, children }: LayoutProps) {
   const store = useStore()
+  const role = store.currentUser.role
+  const isAdmin = role === 'admin'
   const [q, setQ] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const searchRef = useRef<HTMLDivElement>(null)
   const query = q.trim().toLowerCase()
   const results = query
-    ? store.docs.filter((d) => d.title.toLowerCase().includes(query)).slice(0, 6)
+    ? store.docs
+        .filter((d) => d.title.toLowerCase().includes(query))
+        // 只能搜到当前用户有权查看的知识库中的文档
+        .filter((d) => {
+          const space = store.spaces.find((s) => s.id === d.spaceId)
+          return space ? store.canView(space) : false
+        })
+        .slice(0, 6)
     : []
+
+  // 点击页面其他区域关闭搜索下拉
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [])
+
+  const navItems = NAV_ITEMS.filter((item) => !item.adminOnly || isAdmin)
+  const [resetOpen, setResetOpen] = useState(false)
 
   return (
     <div className="flex h-screen bg-slate-50">
@@ -57,7 +94,7 @@ export function AppLayout({ route, navigate, children }: LayoutProps) {
           </div>
         </div>
         <nav className="flex-1 space-y-1 p-3">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const active =
               route.name === item.key ||
               (route.name === 'space' && item.key === 'spaces') ||
@@ -83,9 +120,11 @@ export function AppLayout({ route, navigate, children }: LayoutProps) {
           <div className="rounded-lg bg-slate-50 p-3 text-xs text-muted-foreground">
             <div className="mb-1 flex items-center gap-1.5 font-medium text-slate-700">
               <ShieldCheck className="h-3.5 w-3.5 text-primary" />
-              管理员控制台
+              {isAdmin ? '管理员控制台' : `${ROLE_LABEL[role]}工作台`}
             </div>
-            数据保存在本地浏览器，可用于演示与体验。
+            {isAdmin
+              ? '数据保存在本地浏览器，可用于演示与体验。'
+              : '您以受限角色登录，仅可浏览与编辑被授权的内容。'}
           </div>
         </div>
       </aside>
@@ -93,15 +132,16 @@ export function AppLayout({ route, navigate, children }: LayoutProps) {
       {/* 主区域 */}
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-14 items-center gap-4 border-b bg-white px-6">
-          <div className="relative w-80 max-w-full">
+          <div ref={searchRef} className="relative w-80 max-w-full">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
+              onFocus={() => setSearchOpen(true)}
               placeholder="搜索全部文档…"
               className="pl-9"
             />
-            {results.length > 0 && (
+            {searchOpen && results.length > 0 && (
               <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border bg-white shadow-lg">
                 {results.map((d) => (
                   <button
@@ -109,6 +149,7 @@ export function AppLayout({ route, navigate, children }: LayoutProps) {
                     onClick={() => {
                       navigate({ name: 'doc', id: d.id })
                       setQ('')
+                      setSearchOpen(false)
                     }}
                     className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50"
                   >
@@ -131,13 +172,26 @@ export function AppLayout({ route, navigate, children }: LayoutProps) {
                   </Avatar>
                   <div className="text-left">
                     <div className="text-sm font-medium leading-tight">{store.currentUser.name}</div>
-                    <div className="text-[11px] leading-tight text-muted-foreground">管理员</div>
+                    <div className="text-[11px] leading-tight text-muted-foreground">
+                      {ROLE_LABEL[store.currentUser.role]}
+                    </div>
                   </div>
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-44">
-                <DropdownMenuLabel>{store.currentUser.email}</DropdownMenuLabel>
+                <DropdownMenuLabel className="truncate">
+                  {store.currentUser.email || '未登录'}
+                </DropdownMenuLabel>
                 <DropdownMenuSeparator />
+                {isAdmin && (
+                  <DropdownMenuItem
+                    className="cursor-pointer"
+                    onClick={() => setResetOpen(true)}
+                  >
+                    <RotateCcw className="mr-2 h-4 w-4" />
+                    重置演示数据
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem
                   className="cursor-pointer text-destructive focus:text-destructive"
                   onClick={() => store.logout()}
@@ -151,6 +205,31 @@ export function AppLayout({ route, navigate, children }: LayoutProps) {
         </header>
         <main className="min-h-0 flex-1 overflow-auto">{children}</main>
       </div>
+
+      {/* 重置演示数据确认 */}
+      <AlertDialog open={resetOpen} onOpenChange={setResetOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>重置演示数据？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将清空当前全部修改（知识库、目录、文档、成员、权限），恢复到初始演示数据。该操作不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="cursor-pointer">取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="cursor-pointer"
+              onClick={() => {
+                store.resetData()
+                toast.success('演示数据已重置')
+                navigate({ name: 'dashboard' })
+              }}
+            >
+              确认重置
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

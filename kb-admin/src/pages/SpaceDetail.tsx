@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -49,13 +49,14 @@ function TreeItem(props: {
   node: TreeNode
   nodes: TreeNode[]
   selectedId: string
+  canEdit: boolean
   onSelect: (id: string) => void
   onAddChild: (node: TreeNode) => void
   onRename: (node: TreeNode) => void
   onDelete: (node: TreeNode) => void
   depth: number
 }) {
-  const { node, nodes, selectedId, onSelect, onAddChild, onRename, onDelete, depth } = props
+  const { node, nodes, selectedId, canEdit, onSelect, onAddChild, onRename, onDelete, depth } = props
   const [open, setOpen] = useState(depth < 1)
   const children = nodes.filter((n) => n.parentId === node.id)
   const hasChildren = children.length > 0
@@ -93,6 +94,7 @@ function TreeItem(props: {
           <Folder className="h-4 w-4 shrink-0 text-amber-500" />
         )}
         <span className="truncate">{node.name}</span>
+        {canEdit && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -117,6 +119,7 @@ function TreeItem(props: {
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        )}
       </div>
       {open &&
         children.map((c) => (
@@ -125,6 +128,7 @@ function TreeItem(props: {
             node={c}
             nodes={nodes}
             selectedId={selectedId}
+            canEdit={canEdit}
             onSelect={onSelect}
             onAddChild={onAddChild}
             onRename={onRename}
@@ -155,6 +159,7 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
   } | null>(null)
   const [folderName, setFolderName] = useState('')
   const [deleteNode, setDeleteNode] = useState<TreeNode | null>(null)
+  const [deleteDocId, setDeleteDocId] = useState<string | null>(null)
 
   const spaceDocs = store.docs.filter((d) => d.spaceId === spaceId)
 
@@ -195,9 +200,32 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
 
   const currentNode = nodes.find((n) => n.id === selectedNodeId)
 
-  if (!space) {
+  const notFound = !space
+  const noAccess = !!space && !store.canView(space)
+  const canEdit = !!space && store.canEdit(space)
+
+  // 库不存在或无权访问时，稍后自动返回知识库列表
+  useEffect(() => {
+    if (notFound || noAccess) {
+      const t = window.setTimeout(() => navigate({ name: 'spaces' }), 1500)
+      return () => window.clearTimeout(t)
+    }
+  }, [notFound, noAccess, navigate])
+
+  if (notFound || noAccess) {
     return (
-      <div className="p-6 text-sm text-muted-foreground">知识库不存在或已被删除。</div>
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <div className="text-sm text-muted-foreground">
+          {notFound ? '知识库不存在或已被删除。' : '您没有权限访问该知识库，请联系管理员授权。'}
+        </div>
+        <Button
+          variant="outline"
+          className="cursor-pointer"
+          onClick={() => navigate({ name: 'spaces' })}
+        >
+          返回知识库列表
+        </Button>
+      </div>
     )
   }
 
@@ -217,12 +245,32 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
   }
 
   const handleUpload = (files: FileList) => {
-    let n = 0
+    const MAX_SIZE = 50 * 1024 * 1024 // 50MB，与 FAQ 文档保持一致
+    const ALLOWED = ['doc', 'docx', 'pdf', 'md', 'txt', 'xlsx', 'pptx']
+    const target = selectedNodeId === 'root' ? 'root' : selectedNodeId
+    let ok = 0
+    const skipped: string[] = []
     for (const f of Array.from(files)) {
-      const ext = f.name.split('.').pop() ?? ''
+      const ext = (f.name.split('.').pop() ?? '').toLowerCase()
+      if (f.size > MAX_SIZE) {
+        skipped.push(`${f.name}（超过 50MB）`)
+        continue
+      }
+      if (!ALLOWED.includes(ext)) {
+        skipped.push(`${f.name}（不支持的类型）`)
+        continue
+      }
+      if (
+        store.docs.some(
+          (d) => d.spaceId === spaceId && d.nodeId === target && d.fileName === f.name,
+        )
+      ) {
+        skipped.push(`${f.name}（同名文件已存在）`)
+        continue
+      }
       store.addDoc({
         spaceId,
-        nodeId: selectedNodeId === 'root' ? 'root' : selectedNodeId,
+        nodeId: target,
         title: f.name.replace(/\.[^.]+$/, ''),
         content: `# ${f.name}\n\n文件已上传至知识库，此处为文件说明占位内容。\n\n- 类型：${ext.toUpperCase()}\n- 大小：${formatSize(f.size)}`,
         fileName: f.name,
@@ -230,9 +278,12 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
         fileType: ext.toUpperCase(),
         author: store.currentUser.name,
       })
-      n++
+      ok++
     }
-    toast.success(`成功上传 ${n} 个文件`)
+    if (ok > 0) toast.success(`成功上传 ${ok} 个文件`)
+    if (skipped.length > 0) {
+      toast.warning(`已跳过 ${skipped.length} 个文件：${skipped.join('、')}`, { duration: 6000 })
+    }
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -274,6 +325,7 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
                 node={n}
                 nodes={nodes}
                 selectedId={selectedNodeId}
+                canEdit={canEdit}
                 onSelect={setSelectedNodeId}
                 onAddChild={(node) => {
                   setFolderDialog({ mode: 'create', parentId: node.id })
@@ -294,17 +346,23 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
           )}
         </div>
         <div className="border-t p-3">
-          <Button
-            variant="outline"
-            className="w-full cursor-pointer"
-            onClick={() => {
-              setFolderDialog({ mode: 'create', parentId: null })
-              setFolderName('')
-            }}
-          >
-            <FolderPlus className="mr-2 h-4 w-4" />
-            新建一级目录
-          </Button>
+          {canEdit ? (
+            <Button
+              variant="outline"
+              className="w-full cursor-pointer"
+              onClick={() => {
+                setFolderDialog({ mode: 'create', parentId: null })
+                setFolderName('')
+              }}
+            >
+              <FolderPlus className="mr-2 h-4 w-4" />
+              新建一级目录
+            </Button>
+          ) : (
+            <div className="rounded-lg bg-slate-50 p-2.5 text-center text-xs text-muted-foreground">
+              当前角色仅有查看权限
+            </div>
+          )}
         </div>
       </aside>
 
@@ -349,30 +407,34 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
                   className="pl-9"
                 />
               </div>
-              <Button
-                variant="outline"
-                className="cursor-pointer"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Upload className="mr-2 h-4 w-4" />
-                上传文档
-              </Button>
-              <Button
-                className="cursor-pointer"
-                onClick={() => {
-                  const doc = store.addDoc({
-                    spaceId,
-                    nodeId: selectedNodeId === 'root' ? 'root' : selectedNodeId,
-                    title: '未命名文档',
-                    content: '',
-                    author: store.currentUser.name,
-                  })
-                  navigate({ name: 'doc', id: doc.id })
-                }}
-              >
-                <Plus className="mr-2 h-4 w-4" />
-                新建文档
-              </Button>
+              {canEdit && (
+                <>
+                  <Button
+                    variant="outline"
+                    className="cursor-pointer"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    上传文档
+                  </Button>
+                  <Button
+                    className="cursor-pointer"
+                    onClick={() => {
+                      const doc = store.addDoc({
+                        spaceId,
+                        nodeId: selectedNodeId === 'root' ? 'root' : selectedNodeId,
+                        title: '未命名文档',
+                        content: '',
+                        author: store.currentUser.name,
+                      })
+                      navigate({ name: 'doc', id: doc.id })
+                    }}
+                  >
+                    <Plus className="mr-2 h-4 w-4" />
+                    新建文档
+                  </Button>
+                </>
+              )}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -441,20 +503,19 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
                               navigator.clipboard?.writeText(
                                 `${location.origin}/#/doc/${d.id}`,
                               )
-                              toast.success('文档链接已复制')
+                              toast.success('文档链接已复制，打开该链接可直接跳转到此文档')
                             }}
                           >
                             <Copy className="mr-2 h-4 w-4" /> 复制链接
                           </DropdownMenuItem>
-                          <DropdownMenuItem
-                            className="cursor-pointer text-destructive focus:text-destructive"
-                            onClick={() => {
-                              store.deleteDoc(d.id)
-                              toast.success('文档已删除')
-                            }}
-                          >
-                            <Trash2 className="mr-2 h-4 w-4" /> 删除
-                          </DropdownMenuItem>
+                          {canEdit && (
+                            <DropdownMenuItem
+                              className="cursor-pointer text-destructive focus:text-destructive"
+                              onClick={() => setDeleteDocId(d.id)}
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" /> 删除
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>
@@ -530,6 +591,34 @@ export function SpaceDetailPage({ spaceId, navigate }: Props) {
                 setSelectedNodeId('root')
                 toast.success('目录已删除')
                 setDeleteNode(null)
+              }}
+            >
+              确认删除
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 文档删除确认 */}
+      <Dialog open={!!deleteDocId} onOpenChange={(v) => !v && setDeleteDocId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认删除文档？</DialogTitle>
+            <DialogDescription>
+              将永久删除「{store.docs.find((d) => d.id === deleteDocId)?.title}」，该操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setDeleteDocId(null)}>
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              className="cursor-pointer"
+              onClick={() => {
+                store.deleteDoc(deleteDocId!)
+                toast.success('文档已删除')
+                setDeleteDocId(null)
               }}
             >
               确认删除

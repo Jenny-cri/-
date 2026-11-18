@@ -15,6 +15,8 @@ export interface AppData {
   members: Member[]
   loggedIn: boolean
   currentUserName: string
+  currentUserEmail: string
+  currentUserRole: Role
 }
 
 const KEY = 'kb-admin-data-v1'
@@ -33,6 +35,8 @@ function seed(): AppData {
   return {
     loggedIn: false,
     currentUserName: '系统管理员',
+    currentUserEmail: '',
+    currentUserRole: 'admin',
     spaces: [
       {
         id: 'sp1',
@@ -80,12 +84,12 @@ function seed(): AppData {
       },
       {
         id: 'd2', spaceId: 'sp1', nodeId: 'n3', title: '文档上传功能使用说明',
-        content: '# 文档上传功能使用说明\n\n## 支持格式\n\n- doc / docx\n- pdf\n- md / txt\n- xlsx / pptx\n\n## 上传步骤\n\n1. 进入目标知识库\n2. 选择目标目录\n3. 点击「上传文档」并选择文件',
+        content: '# 文档上传功能使用说明\n\n## 支持格式\n\n- doc / docx\n- pdf\n- md / txt\n- xlsx / pptx\n\n## 上传限制\n\n- 单个文件不超过 50MB\n- 同一目录下不允许重名文件',
         author: '系统管理员', createdAt: daysAgo(95), updatedAt: daysAgo(3),
       },
       {
         id: 'd3', spaceId: 'sp1', nodeId: 'n4', title: '常见问题汇总 FAQ',
-        content: '# 常见问题汇总\n\n## 忘记密码怎么办？\n\n请联系企业管理员重置密码。\n\n## 文档上传失败？\n\n请检查文件大小是否超过 50MB 限制。',
+        content: '# 常见问题汇总\n\n## 忘记密码怎么办？\n\n请联系企业管理员重置密码。\n\n## 文档上传失败？\n\n请检查文件是否超过 50MB 限制，或使用了不支持的文件类型。',
         author: '李文', createdAt: daysAgo(78), updatedAt: daysAgo(8),
       },
       {
@@ -123,7 +127,11 @@ function seed(): AppData {
 function load(): AppData {
   try {
     const raw = localStorage.getItem(KEY)
-    if (raw) return JSON.parse(raw) as AppData
+    if (raw) {
+      const parsed = JSON.parse(raw) as AppData
+      // 兼容旧版本数据：补齐新增字段
+      return { ...seed(), ...parsed, currentUserName: parsed.currentUserName ?? '系统管理员' }
+    }
   } catch {
     /* ignore */
   }
@@ -131,7 +139,11 @@ function load(): AppData {
 }
 
 interface StoreApi extends AppData {
-  currentUser: { name: string; email: string }
+  currentUser: { name: string; email: string; role: Role }
+  /** 当前用户是否可查看该知识库 */
+  canView: (space: Space) => boolean
+  /** 当前用户是否可编辑该知识库内容 */
+  canEdit: (space: Space) => boolean
   login: (email: string) => void
   logout: () => void
   createSpace: (s: Pick<Space, 'name' | 'description' | 'color' | 'visibility'>) => Space
@@ -143,7 +155,9 @@ interface StoreApi extends AppData {
   addDoc: (d: Omit<Doc, 'id' | 'createdAt' | 'updatedAt'>) => Doc
   updateDoc: (id: string, patch: Partial<Doc>) => void
   deleteDoc: (id: string) => void
-  addMember: (m: Omit<Member, 'id'>) => void
+  /** 添加成员，邮箱重复时返回 false */
+  addMember: (m: Omit<Member, 'id'>) => boolean
+  /** 更新成员，邮箱与其他成员冲突时忽略邮箱字段 */
   updateMember: (id: string, patch: Partial<Member>) => void
   removeMember: (id: string) => void
   resetData: () => void
@@ -154,6 +168,7 @@ const StoreContext = createContext<StoreApi | null>(null)
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<AppData>(load)
 
+  // 持久化
   useEffect(() => {
     try {
       localStorage.setItem(KEY, JSON.stringify(data))
@@ -162,17 +177,56 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }
   }, [data])
 
+  // 多标签页同步：其他标签页修改时自动跟随
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === KEY && e.newValue) {
+        try {
+          setData(JSON.parse(e.newValue) as AppData)
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
   const login = useCallback((email: string) => {
-    setData((d) => ({
-      ...d,
-      loggedIn: true,
-      currentUserName: email.startsWith('admin') ? '系统管理员' : email.split('@')[0],
-    }))
+    const normalized = email.trim().toLowerCase()
+    setData((d) => {
+      const member = d.members.find((m) => m.email.toLowerCase() === normalized)
+      return {
+        ...d,
+        loggedIn: true,
+        currentUserName: member?.name ?? '系统管理员',
+        currentUserEmail: normalized,
+        // 未注册邮箱默认视为平台管理员（后台演示）
+        currentUserRole: member?.role ?? 'admin',
+      }
+    })
   }, [])
 
   const logout = useCallback(() => {
     setData((d) => ({ ...d, loggedIn: false }))
   }, [])
+
+  const canView = useCallback(
+    (space: Space) => {
+      if (data.currentUserRole === 'admin') return true
+      if (space.visibility === 'public') return true
+      return space.permissions.view.includes(data.currentUserRole)
+    },
+    [data.currentUserRole],
+  )
+
+  const canEdit = useCallback(
+    (space: Space) => {
+      if (data.currentUserRole === 'admin') return true
+      return space.permissions.edit.includes(data.currentUserRole)
+    },
+    [data.currentUserRole],
+  )
 
   const createSpace: StoreApi['createSpace'] = useCallback((s) => {
     const space: Space = {
@@ -255,16 +309,35 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     setData((d) => ({ ...d, docs: d.docs.filter((doc) => doc.id !== id) }))
   }, [])
 
-  const addMember: StoreApi['addMember'] = useCallback((m) => {
-    setData((d) => ({ ...d, members: [...d.members, { id: uid(), ...m }] }))
-  }, [])
+  const addMember: StoreApi['addMember'] = useCallback(
+    (m) => {
+      const dup = data.members.some(
+        (x) => x.email.toLowerCase() === m.email.toLowerCase(),
+      )
+      if (dup) return false
+      setData((d) => ({ ...d, members: [...d.members, { id: uid(), ...m }] }))
+      return true
+    },
+    [data.members],
+  )
 
-  const updateMember: StoreApi['updateMember'] = useCallback((id, patch) => {
-    setData((d) => ({
-      ...d,
-      members: d.members.map((m) => (m.id === id ? { ...m, ...patch } : m)),
-    }))
-  }, [])
+  const updateMember: StoreApi['updateMember'] = useCallback(
+    (id, patch) => {
+      const emailConflict =
+        patch.email !== undefined &&
+        data.members.some(
+          (x) => x.id !== id && x.email.toLowerCase() === patch.email!.toLowerCase(),
+        )
+      const safePatch = emailConflict
+        ? { ...patch, email: data.members.find((m) => m.id === id)?.email }
+        : patch
+      setData((d) => ({
+        ...d,
+        members: d.members.map((m) => (m.id === id ? { ...m, ...safePatch } : m)),
+      }))
+    },
+    [data.members],
+  )
 
   const removeMember: StoreApi['removeMember'] = useCallback((id) => {
     setData((d) => ({ ...d, members: d.members.filter((m) => m.id !== id) }))
@@ -274,7 +347,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const api: StoreApi = {
     ...data,
-    currentUser: { name: data.currentUserName, email: 'admin@company.com' },
+    currentUser: {
+      name: data.currentUserName,
+      email: data.currentUserEmail,
+      role: data.currentUserRole,
+    },
+    canView,
+    canEdit,
     login,
     logout,
     createSpace,

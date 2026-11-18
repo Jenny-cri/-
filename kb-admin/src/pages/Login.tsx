@@ -58,9 +58,26 @@ export function LoginPage() {
                 <Lock className="mr-2 h-4 w-4" />
                 登录后台
               </Button>
-              <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                演示环境，任意账号密码均可登录
+              <div className="rounded-lg bg-slate-50 p-3 text-xs text-muted-foreground">
+                <div className="mb-1.5 flex items-center gap-1.5 font-medium text-slate-700">
+                  <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+                  演示账号（密码任意），可体验不同角色的权限差异：
+                </div>
+                <ul className="space-y-0.5">
+                  <li>
+                    <code>admin@company.com</code> — 管理员（全部权限）
+                  </li>
+                  <li>
+                    <code>liwen@company.com</code> — 编辑者（可编辑公开库）
+                  </li>
+                  <li>
+                    <code>liuyang@company.com</code> — 查看者（仅浏览）
+                  </li>
+                  <li>
+                    <code>wangkai@company.com</code> — 编辑者（可访问私有库）
+                  </li>
+                </ul>
+                <div className="mt-1.5">未注册邮箱将以管理员身份进入。</div>
               </div>
             </form>
           </CardContent>

@@ -53,6 +53,9 @@ const COLORS = ['#2563eb', '#7c3aed', '#059669', '#ea580c', '#dc2626', '#0891b2'
 
 export function SpacesPage({ navigate }: { navigate: (r: Route) => void }) {
   const store = useStore()
+  const isAdmin = store.currentUser.role === 'admin'
+  // 只展示当前用户有权查看的知识库
+  const visibleSpaces = store.spaces.filter((s) => store.canView(s))
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Space | null>(null)
   const [name, setName] = useState('')
@@ -103,14 +106,22 @@ export function SpacesPage({ navigate }: { navigate: (r: Route) => void }) {
             创建知识库空间、维护目录层级并配置访问权限
           </p>
         </div>
-        <Button className="cursor-pointer" onClick={openCreate}>
-          <Plus className="mr-2 h-4 w-4" />
-          新建知识库
-        </Button>
+        {isAdmin && (
+          <Button className="cursor-pointer" onClick={openCreate}>
+            <Plus className="mr-2 h-4 w-4" />
+            新建知识库
+          </Button>
+        )}
       </div>
 
+      {visibleSpaces.length === 0 && !isAdmin && (
+        <div className="rounded-xl border border-dashed p-12 text-center text-sm text-muted-foreground">
+          暂无可访问的知识库，请联系管理员为您授权。
+        </div>
+      )}
+
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {store.spaces.map((s) => {
+        {visibleSpaces.map((s) => {
           const docCount = store.docs.filter((d) => d.spaceId === s.id).length
           const nodeCount = store.nodes.filter((n) => n.spaceId === s.id).length
           return (
@@ -144,6 +155,7 @@ export function SpacesPage({ navigate }: { navigate: (r: Route) => void }) {
                       </CardDescription>
                     </div>
                   </button>
+                  {isAdmin && (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button
@@ -166,6 +178,7 @@ export function SpacesPage({ navigate }: { navigate: (r: Route) => void }) {
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
+                  )}
                 </div>
               </CardHeader>
               <CardContent
@@ -191,14 +204,16 @@ export function SpacesPage({ navigate }: { navigate: (r: Route) => void }) {
           )
         })}
 
-        <button
-          onClick={openCreate}
-          className="flex min-h-52 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed text-muted-foreground transition-colors duration-200 hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
-        >
-          <LibraryBig className="h-8 w-8" />
-          <span className="text-sm font-medium">新建知识库</span>
-          <span className="text-xs">沉淀团队知识资产</span>
-        </button>
+        {isAdmin && (
+          <button
+            onClick={openCreate}
+            className="flex min-h-52 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed text-muted-foreground transition-colors duration-200 hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+          >
+            <LibraryBig className="h-8 w-8" />
+            <span className="text-sm font-medium">新建知识库</span>
+            <span className="text-xs">沉淀团队知识资产</span>
+          </button>
+        )}
       </div>
 
       {/* 新建 / 编辑对话框 */}

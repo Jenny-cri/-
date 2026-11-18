@@ -26,18 +26,35 @@ interface Props {
 
 export function DashboardPage({ navigate }: Props) {
   const store = useStore()
-  const recent = [...store.docs]
+  const isAdmin = store.currentUser.role === 'admin'
+  // 统计与列表只统计当前用户有权查看的知识库
+  const viewableSpaces = store.spaces.filter((s) => store.canView(s))
+  const viewableSpaceIds = new Set(viewableSpaces.map((s) => s.id))
+  const viewableDocs = store.docs.filter((d) => viewableSpaceIds.has(d.spaceId))
+  const recent = [...viewableDocs]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 6)
-  const weekNew = store.docs.filter(
+  const weekNew = viewableDocs.filter(
     (d) => Date.now() - new Date(d.createdAt).getTime() < 7 * 86400000,
   ).length
 
   const stats = [
-    { label: '知识库总数', value: store.spaces.length, icon: LibraryBig, hint: '企业知识空间' },
-    { label: '文档总数', value: store.docs.length, icon: FileText, hint: `本周新增 ${weekNew} 篇` },
-    { label: '成员总数', value: store.members.length, icon: Users, hint: '含 3 种角色' },
-    { label: '目录节点', value: store.nodes.length, icon: TrendingUp, hint: '多级层级结构' },
+    { label: '知识库总数', value: viewableSpaces.length, icon: LibraryBig, hint: '企业知识空间' },
+    { label: '文档总数', value: viewableDocs.length, icon: FileText, hint: `本周新增 ${weekNew} 篇` },
+    isAdmin
+      ? { label: '成员总数', value: store.members.length, icon: Users, hint: '含 3 种角色' }
+      : {
+          label: '可编辑知识库',
+          value: viewableSpaces.filter((s) => store.canEdit(s)).length,
+          icon: Users,
+          hint: '当前角色可编辑',
+        },
+    {
+      label: '目录节点',
+      value: store.nodes.filter((n) => viewableSpaceIds.has(n.spaceId)).length,
+      icon: TrendingUp,
+      hint: '多级层级结构',
+    },
   ]
 
   return (
@@ -121,7 +138,7 @@ export function DashboardPage({ navigate }: Props) {
             <CardTitle className="text-base">知识库</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {store.spaces.map((s) => {
+            {viewableSpaces.map((s) => {
               const count = store.docs.filter((d) => d.spaceId === s.id).length
               return (
                 <button

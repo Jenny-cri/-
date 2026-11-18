@@ -46,6 +46,19 @@ export function MembersPage() {
   const [form, setForm] = useState(EMPTY_FORM)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const memberToRemove = store.members.find((m) => m.id === confirmRemove)
+  const isAdmin = store.currentUser.role === 'admin'
+
+  // 权限管理仅对管理员开放
+  if (!isAdmin) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 p-6 py-24 text-center">
+        <ShieldCheck className="h-10 w-10 text-muted-foreground/50" />
+        <div className="text-sm text-muted-foreground">
+          成员与权限管理仅对管理员开放，如需调整请联系平台管理员。
+        </div>
+      </div>
+    )
+  }
 
   const openAdd = () => {
     setEditingId(null)
