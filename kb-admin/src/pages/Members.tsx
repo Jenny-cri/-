@@ -27,7 +27,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useStore } from '@/lib/store'
-import { ROLE_LABEL, type Role } from '@/types'
+import { ROLE_LABEL, type Member, type Role, type Space } from '@/types'
 
 const ROLES: Role[] = ['admin', 'editor', 'viewer']
 
@@ -37,26 +37,77 @@ const ROLE_BADGE: Record<Role, { className: string }> = {
   viewer: { className: 'bg-slate-100 text-slate-600 border-slate-200' },
 }
 
+const EMPTY_FORM = { name: '', email: '', dept: '', role: 'viewer' as Role }
+
 export function MembersPage() {
   const store = useStore()
-  const [addOpen, setAddOpen] = useState(false)
-  const [form, setForm] = useState({ name: '', email: '', dept: '', role: 'viewer' as Role })
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null) // null = 添加模式
+  const [form, setForm] = useState(EMPTY_FORM)
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const memberToRemove = store.members.find((m) => m.id === confirmRemove)
 
-  const submitAdd = () => {
+  const openAdd = () => {
+    setEditingId(null)
+    setForm(EMPTY_FORM)
+    setDialogOpen(true)
+  }
+
+  const openEdit = (m: Member) => {
+    setEditingId(m.id)
+    setForm({ name: m.name, email: m.email, dept: m.dept, role: m.role })
+    setDialogOpen(true)
+  }
+
+  const submitDialog = () => {
     if (!form.name.trim() || !form.email.trim()) {
       toast.error('请填写姓名和邮箱')
       return
     }
-    if (store.members.some((m) => m.email === form.email.trim())) {
-      toast.error('该邮箱已存在')
+    const payload = {
+      name: form.name.trim(),
+      email: form.email.trim(),
+      dept: form.dept.trim() || '未分配',
+      role: form.role,
+    }
+    if (editingId) {
+      if (store.members.some((m) => m.email === payload.email && m.id !== editingId)) {
+        toast.error('该邮箱已被其他成员使用')
+        return
+      }
+      store.updateMember(editingId, payload)
+      toast.success('成员信息已更新')
+    } else {
+      if (store.members.some((m) => m.email === payload.email)) {
+        toast.error('该邮箱已存在')
+        return
+      }
+      store.addMember(payload)
+      toast.success('成员已添加')
+    }
+    setDialogOpen(false)
+  }
+
+  /** 切换某库某权限组的角色勾选 */
+  const togglePerm = (s: Space, key: 'view' | 'edit', r: Role) => {
+    // 管理员的可查看权限为锁定项，不可取消
+    if (key === 'view' && r === 'admin') {
+      toast.info('管理员始终拥有全部权限')
       return
     }
-    store.addMember({ ...form, name: form.name.trim(), email: form.email.trim(), dept: form.dept.trim() || '未分配' })
-    toast.success('成员已添加')
-    setForm({ name: '', email: '', dept: '', role: 'viewer' })
-    setAddOpen(false)
+    const cur = store.spaces.find((x) => x.id === s.id) ?? s
+    const next = cur.permissions[key].includes(r)
+      ? cur.permissions[key].filter((x) => x !== r)
+      : [...cur.permissions[key], r]
+    // 授予编辑权时自动授予查看权；取消查看权时同步取消编辑权
+    const view =
+      key === 'view' ? next : next.includes(r) && !cur.permissions.view.includes(r)
+        ? [...cur.permissions.view, r]
+        : cur.permissions.view
+    const edit =
+      key === 'edit' ? next : next.includes(r) ? cur.permissions.edit : cur.permissions.edit.filter((x) => x !== r)
+    store.updateSpace(s.id, { permissions: { view, edit } })
+    toast.success(`已${next.includes(r) ? '授予' : '移除'}「${s.name}」的${ROLE_LABEL[r]}${key === 'view' ? '查看' : '编辑'}权限`)
   }
 
   return (
@@ -86,7 +137,7 @@ export function MembersPage() {
                 <CardTitle className="text-base">成员列表</CardTitle>
                 <CardDescription>共 {store.members.length} 名成员</CardDescription>
               </div>
-              <Button className="cursor-pointer" onClick={() => setAddOpen(true)}>
+              <Button className="cursor-pointer" onClick={openAdd}>
                 <UserPlus className="mr-2 h-4 w-4" />
                 添加成员
               </Button>
@@ -98,7 +149,7 @@ export function MembersPage() {
                     <TableHead className="pl-6">成员</TableHead>
                     <TableHead className="w-36">部门</TableHead>
                     <TableHead className="w-40">角色</TableHead>
-                    <TableHead className="w-24 text-right">操作</TableHead>
+                    <TableHead className="w-28 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -139,14 +190,26 @@ export function MembersPage() {
                         </Select>
                       </TableCell>
                       <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 cursor-pointer text-muted-foreground hover:text-destructive"
-                          onClick={() => setConfirmRemove(m.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 cursor-pointer text-muted-foreground hover:text-primary"
+                            onClick={() => openEdit(m)}
+                            title="编辑成员"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 cursor-pointer text-muted-foreground hover:text-destructive"
+                            onClick={() => setConfirmRemove(m.id)}
+                            title="移除成员"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -211,37 +274,25 @@ export function MembersPage() {
                         </>
                       )}
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-1.5">
                       {ROLES.map((r) => {
                         const checked = s.permissions[key].includes(r)
+                        const locked = key === 'view' && r === 'admin'
                         return (
-                          <label
+                          <button
                             key={r}
-                            className="flex cursor-pointer items-center gap-2.5 text-sm"
+                            type="button"
+                            onClick={() => togglePerm(s, key, r)}
+                            className={`flex w-full cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors duration-150 ${
+                              checked
+                                ? 'border-primary/40 bg-primary/5'
+                                : 'border-transparent hover:bg-slate-100'
+                            } ${locked ? 'opacity-60' : ''}`}
                           >
                             <Checkbox
                               checked={checked}
-                              disabled={key === 'view' && r === 'admin'}
-                              onCheckedChange={(v) => {
-                              const next = v
-                                ? [...s.permissions[key], r]
-                                : s.permissions[key].filter((x) => x !== r)
-                              // 授予编辑权时自动授予查看权；取消查看权时同步取消编辑权
-                              const view =
-                                key === 'view'
-                                  ? next
-                                  : !s.permissions.view.includes(r)
-                                    ? [...s.permissions.view, r]
-                                    : s.permissions.view
-                              const edit =
-                                key === 'edit'
-                                  ? next
-                                  : s.permissions.edit.includes(r)
-                                    ? s.permissions.edit.filter((x) => x !== r)
-                                    : s.permissions.edit
-                              store.updateSpace(s.id, { permissions: { view, edit } })
-                              toast.success('权限已更新')
-                            }}
+                              className="pointer-events-none"
+                              tabIndex={-1}
                             />
                             <Badge variant="outline" className={ROLE_BADGE[r].className}>
                               {ROLE_LABEL[r]}
@@ -253,7 +304,10 @@ export function MembersPage() {
                                   ? '可创建、编辑、上传文档'
                                   : '仅可浏览与检索'}
                             </span>
-                          </label>
+                            {locked && (
+                              <span className="ml-auto text-[10px] text-muted-foreground">锁定</span>
+                            )}
+                          </button>
                         )
                       })}
                     </div>
@@ -265,12 +319,14 @@ export function MembersPage() {
         </TabsContent>
       </Tabs>
 
-      {/* 添加成员 */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+      {/* 添加 / 编辑成员 */}
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>添加成员</DialogTitle>
-            <DialogDescription>新成员加入后将按所选角色获得对应权限</DialogDescription>
+            <DialogTitle>{editingId ? '编辑成员' : '添加成员'}</DialogTitle>
+            <DialogDescription>
+              {editingId ? '修改成员的姓名、部门、邮箱或角色' : '新成员加入后将按所选角色获得对应权限'}
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
@@ -304,11 +360,11 @@ export function MembersPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" className="cursor-pointer" onClick={() => setAddOpen(false)}>
+            <Button variant="outline" className="cursor-pointer" onClick={() => setDialogOpen(false)}>
               取消
             </Button>
-            <Button className="cursor-pointer" onClick={submitAdd}>
-              添加
+            <Button className="cursor-pointer" onClick={submitDialog}>
+              {editingId ? '保存修改' : '添加'}
             </Button>
           </DialogFooter>
         </DialogContent>
